@@ -1,0 +1,136 @@
+import numpy as np
+import operator
+from collections import Counter
+import matplotlib.pyplot as plt
+import time
+from scipy.spatial.distance import cdist
+from scipy.stats import entropy
+import csv
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.model_selection import LeaveOneOut
+from sklearn.metrics import accuracy_score, normalized_mutual_info_score, confusion_matrix
+from sklearn.preprocessing import label_binarize
+from sklearn import metrics
+
+def Img_to_Mat(fileName):
+    f = open(fileName)
+    ss = f.readlines()
+    l = len(ss)
+    f.close()
+    returnMat = np.zeros((l,256))
+    returnClassVector = np.zeros((l,1))
+    for i in range(l):
+        s1 = ss[i].split()
+        for j in range(256):
+            returnMat[i][j] = float(s1[j])
+        binary_lable = s1[256:266]
+        class_label = int(''.join(binary_lable), 2)
+
+        returnClassVector[i] = class_label
+    return returnMat,returnClassVector
+
+
+def calculate_conditional_entropy(y_true, y_pred, classes):
+    # 将标签二值化，以便计算混淆矩阵
+    y_true_bin = label_binarize(y_true, classes=np.unique(classes))
+    y_pred_bin = label_binarize(y_pred, classes=np.unique(classes))
+
+    # 计算混淆矩阵
+    cm = confusion_matrix(y_true_bin, y_pred_bin)
+
+    # 计算条件熵（这里使用行熵作为条件熵的近似）
+    row_entropy = [entropy(row) for row in cm if np.any(row)]  # 忽略全零行
+    conditional_entropy = np.mean(row_entropy) if row_entropy else 0
+    return conditional_entropy
+
+
+def Knn(X_train, y_train, X_test, k, p=2):
+    num_test = X_test.shape[0]
+    y_pred = [0] * num_test
+    for i in range(num_test):
+        # 计算当前测试样本与所有训练样本之间的距离
+        distances = cdist([X_test[i]], X_train, 'minkowski', p=p)[0]
+        # 对距离进行排序，并找到k个最近邻居的索引
+        k_indices = np.argsort(distances)[:k]
+        # 获取这些邻居的标签
+        k_nearest_labels = [y_train[i] for i in k_indices]
+        # 对这些标签进行投票，选择出现次数最多的标签
+        most_common = Counter(k_nearest_labels).most_common(1)
+        y_pred[i] = most_common[0][0]
+    return np.array(y_pred)
+
+X,y = Img_to_Mat('semeion.data')
+y = y.ravel()
+print("Unique classes in original y:", np.unique(y))
+# print(np.shape(X))
+# print(np.shape(y))
+def leave_one_out_cross_validation(X, y, k_values):
+    num_samples = X.shape[0]
+    accuracies = {}
+    nmis = {}
+
+    for k in k_values:
+        correct = 0
+        y_preds = []
+        #留一
+        for i in range(num_samples):
+            X_train, y_train = X[np.arange(num_samples) != i], y[np.arange(num_samples) != i]
+            X_test, y_test = X[i:i + 1], y[i:i + 1]
+            y_pred = Knn(X_train, y_train, X_test, k)
+
+            if y_pred[0] == y_test:
+                correct += 1
+
+            y_preds.append(y_pred[0])
+
+
+        accuracy = correct / num_samples
+        accuracies[k] = accuracy
+        nmi = normalized_mutual_info_score(y, y_preds)
+        nmis[k] = nmi
+    return accuracies, nmis
+
+k_values = [5, 9, 13]
+accuracies, nmis = leave_one_out_cross_validation(X, y, k_values)
+for k, accuracy in accuracies.items():
+    nmi_k = nmis[k]
+    print(f"k={k}, Accuracy={accuracy:.8f}, Normalized Mutual Information={nmi_k:.8f}")
+
+
+accuracies1 = {}
+k_nmis = {}
+for k in k_values:
+    # 初始化分类器
+    knn = KNeighborsClassifier(n_neighbors=k)
+    # 留一法
+    loo = LeaveOneOut()
+    k_accuracy = []
+    y_preds = []
+
+    for train_index, test_index in loo.split(X):
+        X_train, X_test = X[train_index], X[test_index]
+        y_train, y_test = y[train_index], y[test_index]
+
+        # 训练
+        knn.fit(X_train, y_train.ravel())  # y扁平化
+
+        y_pred = knn.predict(X_test)
+
+        accuracy1 = accuracy_score(y_test, y_pred)
+        k_accuracy.append(accuracy1)
+
+        y_preds.append(y_pred[0])
+
+
+
+        # 平均
+    average_accuracy = np.mean(k_accuracy)
+    nmi = normalized_mutual_info_score(y, y_preds)
+    k_nmis[k] = nmi
+
+    print(f"K = {k},scikit-learn Accuracy={average_accuracy:.8f},Normalized Mutual Information={k_nmis[k]:.8f}")
+
+
+# y_2d = y[:, np.newaxis]  # 或者使用 y_2d = y.reshape(-1, 1)
+# con_data = np.concatenate([X, y_2d], axis=1)
+# np.savetxt("con_data.csv", con_data, delimiter=",")
